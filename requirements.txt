@@ -1,0 +1,11 @@
+pymc_marketing
+openpyxl
+graphviz
+
+arviz~=0.21.0
+matplotlib~=3.10.0
+numpy~=2.0.1
+pandas~=2.2.3
+pymc~=5.23.0
+requests~=2.32.3
+ipython~=9.3.0

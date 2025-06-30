@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-包含季节性调整的完整MBG-NBD模型实现
-集成马尔可夫季节性学习和预设季节性因子两种方法
+完整的MBG-NBD客户生命周期价值预测系统
+Complete MBG-NBD Customer Lifetime Value Prediction System
+
+功能模块：
+1. 数据加载与预处理
+2. 客户分层与行为异质性分析
+3. 季节性马尔可夫链学习
+4. MBG-NBD模型训练
+5. CLV预测与验证
+6. 效果对比与优化分析
 
 作者: Manus AI
-版本: 3.0 (集成季节性)
+版本: 2.0
 日期: 2025-01-01
 """
 
@@ -13,15 +21,16 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy import optimize
-from scipy.special import gamma, hyp2f1, loggamma
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import warnings
-import json
-import pickle
 from datetime import datetime, timedelta
-import logging
+import pickle
+import json
+import warnings
+from scipy import stats
+from scipy.optimize import minimize
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import math
 
 warnings.filterwarnings('ignore')
 
@@ -29,1116 +38,1160 @@ warnings.filterwarnings('ignore')
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
-
-class SeasonalMBGNBDModel:
+class CompleteMBGNBDSystem:
     """
-    包含季节性调整的完整MBG-NBD模型实现
-
-    功能包括：
-    1. 数据预处理和质量检查
-    2. RFM特征工程
-    3. 季节性因子学习（马尔可夫方法 + 预设方法）
-    4. MBG-NBD模型训练
-    5. 季节性调整的CLV预测
-    6. 模型验证和评估
-    7. 结果可视化
-    8. 模型保存和加载
+    完整的MBG-NBD客户生命周期价值预测系统
     """
 
-    def __init__(self, observation_period_end=None, prediction_period=90, seasonal_method='markov'):
+    def __init__(self, prediction_period=90):
         """
-        初始化季节性MBG-NBD模型
+        初始化系统
 
         参数:
-        observation_period_end: 观察期结束时间
         prediction_period: 预测期长度（天）
-        seasonal_method: 季节性方法 ('markov', 'preset', 'none')
         """
-        self.observation_period_end = observation_period_end
         self.prediction_period = prediction_period
-        self.seasonal_method = seasonal_method
-
-        # 模型参数
-        self.params = None
-        self.model_fitted = False
-
-        # 季节性相关
-        self.seasonal_factors = None
-        self.transition_matrix = None
-        self.emission_probabilities = None
-        self.seasonal_learned = False
 
         # 数据存储
         self.raw_data = None
         self.processed_data = None
         self.rfm_data = None
-        self.train_data = None
-        self.test_data = None
+        self.customer_segments = None
+
+        # 季节性分析
+        self.seasonal_factors = None
+        self.markov_transition_matrix = None
+        self.emission_probabilities = None
+
+        # 模型参数
+        self.base_model_params = None  # 基础MBG-NBD参数
+        self.enhanced_model_params = None  # 增强模型参数
 
         # 预测结果
-        self.predictions = None
-        self.clv_predictions = None
-        self.seasonal_clv_predictions = None
+        self.base_predictions = None
+        self.enhanced_predictions = None
 
-        # 模型评估结果
-        self.validation_results = None
-        self.seasonal_validation_results = None
+        # 性能指标
+        self.performance_metrics = {}
 
-        logger.info(f"季节性MBG-NBD模型初始化完成，季节性方法: {seasonal_method}")
+        print("🚀 完整MBG-NBD系统初始化完成")
+        print(f"   预测期长度: {prediction_period}天")
 
-    def load_data(self, data_path, customer_col='customer_id', amount_col='amount', date_col='order_date'):
+    # ==================== 第一阶段：数据加载与预处理 ====================
+
+    def load_data(self, data_path):
         """
-        加载和预处理数据
-
-        参数:
-        data_path: 数据文件路径
-        customer_col: 客户ID列名
-        amount_col: 金额列名
-        date_col: 日期列名
+        第一阶段：数据加载与预处理
         """
-        logger.info(f"开始加载数据: {data_path}")
+        print("\n" + "=" * 60)
+        print("第一阶段：数据加载与预处理")
+        print("=" * 60)
 
         try:
-            # 加载数据
-            if data_path.endswith('.csv'):
-                self.raw_data = pd.read_csv(data_path)
-            elif data_path.endswith('.xlsx'):
-                self.raw_data = pd.read_excel(data_path)
-            else:
-                raise ValueError("不支持的文件格式，请使用CSV或Excel文件")
+            # 1.1 加载原始数据
+            print("📂 1.1 加载原始数据...")
+            self.raw_data = pd.read_csv(data_path)
 
             # 标准化列名
-            self.raw_data.columns = [customer_col, amount_col, date_col]
-            self.raw_data.columns = ['customer_id', 'amount', 'order_date']
+            if 'create_time' in self.raw_data.columns:
+                self.raw_data.columns = ['customer_id', 'amount', 'order_date']
+
+            print(f"   ✅ 原始数据加载成功: {len(self.raw_data)}条记录")
+            print(f"   📊 数据列: {list(self.raw_data.columns)}")
+
+            # 1.2 数据清洗与预处理
+            print("\n🧹 1.2 数据清洗与预处理...")
 
             # 数据类型转换
             self.raw_data['order_date'] = pd.to_datetime(self.raw_data['order_date'])
             self.raw_data['amount'] = pd.to_numeric(self.raw_data['amount'], errors='coerce')
-            self.raw_data['month'] = self.raw_data['order_date'].dt.month
-            self.raw_data['year'] = self.raw_data['order_date'].dt.year
-
-            logger.info(f"数据加载完成: {len(self.raw_data)}条记录, {self.raw_data['customer_id'].nunique()}个客户")
 
             # 数据质量检查
-            self._data_quality_check()
+            null_count = self.raw_data.isnull().sum().sum()
+            duplicate_count = self.raw_data.duplicated().sum()
+            negative_amount = (self.raw_data['amount'] <= 0).sum()
 
-            # 数据预处理
-            self._preprocess_data()
+            print(f"   📋 数据质量检查:")
+            print(f"      - 空值数量: {null_count}")
+            print(f"      - 重复记录: {duplicate_count}")
+            print(f"      - 非正金额: {negative_amount}")
 
-            return self.processed_data
+            # 数据清洗
+            original_count = len(self.raw_data)
+
+            # 移除空值和非正金额
+            self.processed_data = self.raw_data.dropna()
+            self.processed_data = self.processed_data[self.processed_data['amount'] > 0]
+
+            # 移除重复记录
+            self.processed_data = self.processed_data.drop_duplicates()
+
+            cleaned_count = len(self.processed_data)
+            removed_count = original_count - cleaned_count
+
+            print(f"   ✅ 数据清洗完成:")
+            print(f"      - 清洗前: {original_count}条")
+            print(f"      - 清洗后: {cleaned_count}条")
+            print(f"      - 移除: {removed_count}条 ({removed_count / original_count * 100:.1f}%)")
+
+            # 1.3 添加时间特征
+            print("\n📅 1.3 添加时间特征...")
+
+            self.processed_data['year'] = self.processed_data['order_date'].dt.year
+            self.processed_data['month'] = self.processed_data['order_date'].dt.month
+            self.processed_data['quarter'] = self.processed_data['order_date'].dt.quarter
+            self.processed_data['dayofweek'] = self.processed_data['order_date'].dt.dayofweek
+            self.processed_data['week'] = self.processed_data['order_date'].dt.isocalendar().week
+
+            # 数据时间范围
+            date_range = {
+                'start_date': self.processed_data['order_date'].min(),
+                'end_date': self.processed_data['order_date'].max(),
+                'span_days': (self.processed_data['order_date'].max() - self.processed_data['order_date'].min()).days,
+                'span_years': (self.processed_data['order_date'].max() - self.processed_data[
+                    'order_date'].min()).days / 365
+            }
+
+            print(f"   ✅ 时间特征添加完成:")
+            print(
+                f"      - 时间范围: {date_range['start_date'].strftime('%Y-%m-%d')} 到 {date_range['end_date'].strftime('%Y-%m-%d')}")
+            print(f"      - 时间跨度: {date_range['span_days']}天 ({date_range['span_years']:.1f}年)")
+
+            # 1.4 基础统计分析
+            print("\n📊 1.4 基础统计分析...")
+
+            basic_stats = {
+                'total_customers': self.processed_data['customer_id'].nunique(),
+                'total_transactions': len(self.processed_data),
+                'total_revenue': self.processed_data['amount'].sum(),
+                'avg_transaction_value': self.processed_data['amount'].mean(),
+                'median_transaction_value': self.processed_data['amount'].median(),
+                'transactions_per_customer': len(self.processed_data) / self.processed_data['customer_id'].nunique()
+            }
+
+            print(f"   ✅ 基础统计完成:")
+            print(f"      - 客户总数: {basic_stats['total_customers']:,}")
+            print(f"      - 交易总数: {basic_stats['total_transactions']:,}")
+            print(f"      - 总收入: {basic_stats['total_revenue']:,.2f}元")
+            print(f"      - 平均交易额: {basic_stats['avg_transaction_value']:.2f}元")
+            print(f"      - 人均交易次数: {basic_stats['transactions_per_customer']:.1f}次")
+
+            return True
 
         except Exception as e:
-            logger.error(f"数据加载失败: {e}")
-            raise
+            print(f"❌ 数据加载失败: {e}")
+            return False
 
-    def _data_quality_check(self):
-        """数据质量检查"""
-        logger.info("开始数据质量检查...")
+    # ==================== 第二阶段：客户分层与行为异质性分析 ====================
 
-        # 检查缺失值
-        missing_data = self.raw_data.isnull().sum()
-        if missing_data.sum() > 0:
-            logger.warning(f"发现缺失值: {missing_data.to_dict()}")
+    def create_customer_segmentation(self):
+        """
+        第二阶段：客户分层与行为异质性分析
+        """
+        print("\n" + "=" * 60)
+        print("第二阶段：客户分层与行为异质性分析")
+        print("=" * 60)
 
-        # 检查负值
-        negative_amounts = (self.raw_data['amount'] < 0).sum()
-        if negative_amounts > 0:
-            logger.warning(f"发现{negative_amounts}条负金额记录")
+        # 2.1 计算RFM特征
+        print("📊 2.1 计算RFM特征...")
 
-        # 检查零值
-        zero_amounts = (self.raw_data['amount'] == 0).sum()
-        if zero_amounts > 0:
-            logger.warning(f"发现{zero_amounts}条零金额记录")
+        # 计算观察期截止日期（最后一次交易日期）
+        observation_end = self.processed_data['order_date'].max()
 
-        # 检查日期范围
-        date_range = self.raw_data['order_date'].max() - self.raw_data['order_date'].min()
-        logger.info(f"数据时间跨度: {date_range.days}天")
+        # 按客户聚合计算RFM
+        customer_rfm = self.processed_data.groupby('customer_id').agg({
+            'order_date': ['min', 'max', 'count'],
+            'amount': ['sum', 'mean']
+        }).round(2)
 
-        # 检查客户交易频次
-        customer_freq = self.raw_data.groupby('customer_id').size()
-        logger.info(f"客户交易频次统计: 平均{customer_freq.mean():.1f}次, 中位数{customer_freq.median():.1f}次")
+        # 重命名列
+        customer_rfm.columns = ['first_purchase', 'last_purchase', 'frequency', 'monetary_total', 'monetary_avg']
+        customer_rfm = customer_rfm.reset_index()
 
-    def _preprocess_data(self):
-        """数据预处理"""
-        logger.info("开始数据预处理...")
+        # 计算Recency（最近一次购买距今天数）
+        customer_rfm['recency'] = (observation_end - customer_rfm['last_purchase']).dt.days
 
-        # 复制原始数据
-        self.processed_data = self.raw_data.copy()
+        # 计算T（客户生命周期长度）
+        customer_rfm['T'] = (customer_rfm['last_purchase'] - customer_rfm['first_purchase']).dt.days
+        customer_rfm['T'] = customer_rfm['T'].apply(lambda x: max(x, 1))  # 最小为1天
 
-        # 移除缺失值
-        initial_count = len(self.processed_data)
-        self.processed_data = self.processed_data.dropna()
-        logger.info(f"移除缺失值: {initial_count - len(self.processed_data)}条")
+        # 计算历史购买频率（用于MBG-NBD）
+        customer_rfm['historical_frequency'] = customer_rfm['frequency'] - 1  # MBG-NBD中频率不包括首次购买
+        customer_rfm['historical_frequency'] = customer_rfm['historical_frequency'].apply(lambda x: max(x, 0))
 
-        # 移除非正金额
-        initial_count = len(self.processed_data)
-        self.processed_data = self.processed_data[self.processed_data['amount'] > 0]
-        logger.info(f"移除非正金额: {initial_count - len(self.processed_data)}条")
+        print(f"   ✅ RFM特征计算完成: {len(customer_rfm)}个客户")
+        print(f"      - 平均Recency: {customer_rfm['recency'].mean():.1f}天")
+        print(f"      - 平均Frequency: {customer_rfm['frequency'].mean():.1f}次")
+        print(f"      - 平均Monetary: {customer_rfm['monetary_avg'].mean():.2f}元")
 
-        # 设置观察期结束时间
-        if self.observation_period_end is None:
-            # 使用数据中80%的时间作为观察期
-            date_range = self.processed_data['order_date'].max() - self.processed_data['order_date'].min()
-            self.observation_period_end = self.processed_data['order_date'].min() + date_range * 0.8
+        # 2.2 客户价值分层
+        print("\n🎯 2.2 客户价值分层...")
 
-        logger.info(f"观察期结束时间: {self.observation_period_end}")
+        # 使用RFM评分进行分层
+        # R评分（Recency越小越好）
+        customer_rfm['R_score'] = pd.qcut(customer_rfm['recency'], 5, labels=[5, 4, 3, 2, 1], duplicates='drop')
 
-        # 按时间排序
-        self.processed_data = self.processed_data.sort_values(['customer_id', 'order_date'])
+        # F评分（Frequency越大越好）
+        customer_rfm['F_score'] = pd.qcut(customer_rfm['frequency'].rank(method='first'), 5, labels=[1, 2, 3, 4, 5],
+                                          duplicates='drop')
 
-        logger.info(f"数据预处理完成: {len(self.processed_data)}条记录")
+        # M评分（Monetary越大越好）
+        customer_rfm['M_score'] = pd.qcut(customer_rfm['monetary_total'], 5, labels=[1, 2, 3, 4, 5], duplicates='drop')
 
-    def learn_seasonal_factors(self):
-        """学习季节性因子"""
-        if self.seasonal_method == 'none':
-            logger.info("跳过季节性因子学习")
-            self.seasonal_factors = {i: 1.0 for i in range(1, 13)}
-            return self.seasonal_factors
+        # 计算综合RFM评分
+        customer_rfm['RFM_score'] = (customer_rfm['R_score'].astype(float) +
+                                     customer_rfm['F_score'].astype(float) +
+                                     customer_rfm['M_score'].astype(float)) / 3
 
-        logger.info(f"开始学习季节性因子，方法: {self.seasonal_method}")
-
-        if self.seasonal_method == 'preset':
-            self.seasonal_factors = self._learn_preset_seasonal_factors()
-        elif self.seasonal_method == 'markov':
-            self.seasonal_factors = self._learn_markov_seasonal_factors()
-        else:
-            raise ValueError(f"不支持的季节性方法: {self.seasonal_method}")
-
-        self.seasonal_learned = True
-
-        logger.info("季节性因子学习完成:")
-        for month, factor in self.seasonal_factors.items():
-            logger.info(f"  {month}月: {factor:.3f}")
-
-        return self.seasonal_factors
-
-    def _learn_preset_seasonal_factors(self):
-        """学习预设季节性因子（简单月度平均法）"""
-        logger.info("使用预设方法学习季节性因子...")
-
-        # 计算月度收入
-        monthly_revenue = self.processed_data.groupby('month')['amount'].sum()
-        monthly_avg = monthly_revenue.mean()
-
-        # 计算季节性因子
-        seasonal_factors = {}
-        for month in range(1, 13):
-            if month in monthly_revenue.index:
-                seasonal_factors[month] = monthly_revenue[month] / monthly_avg
+        # 客户分层
+        def classify_customer_segment(rfm_score):
+            if rfm_score >= 4.5:
+                return 'Champions'  # 冠军客户
+            elif rfm_score >= 3.5:
+                return 'Loyal'  # 忠诚客户
+            elif rfm_score >= 2.5:
+                return 'Potential'  # 潜力客户
+            elif rfm_score >= 1.5:
+                return 'At_Risk'  # 风险客户
             else:
-                seasonal_factors[month] = 1.0
+                return 'Lost'  # 流失客户
 
-        return seasonal_factors
+        customer_rfm['segment'] = customer_rfm['RFM_score'].apply(classify_customer_segment)
 
-    def _learn_markov_seasonal_factors(self):
-        """学习马尔可夫季节性因子"""
-        logger.info("使用马尔可夫方法学习季节性因子...")
+        # 分层统计
+        segment_stats = customer_rfm.groupby('segment').agg({
+            'customer_id': 'count',
+            'monetary_total': ['sum', 'mean'],
+            'frequency': 'mean',
+            'recency': 'mean'
+        }).round(2)
 
-        # 1. 学习状态转移矩阵
-        self.transition_matrix = self._learn_transition_matrix()
+        segment_stats.columns = ['customer_count', 'total_revenue', 'avg_revenue', 'avg_frequency', 'avg_recency']
+        segment_stats['revenue_percentage'] = (
+                    segment_stats['total_revenue'] / segment_stats['total_revenue'].sum() * 100).round(1)
 
-        # 2. 学习发射概率
-        self.emission_probabilities = self._learn_emission_probabilities()
+        print(f"   ✅ 客户分层完成:")
+        for segment in segment_stats.index:
+            stats = segment_stats.loc[segment]
+            print(f"      - {segment}: {stats['customer_count']}人 ({stats['revenue_percentage']}%收入)")
 
-        # 3. 计算综合季节性因子
-        seasonal_factors = self._compute_markov_seasonal_factors()
+        # 2.3 行为异质性分析
+        print("\n🔍 2.3 行为异质性分析...")
 
-        return seasonal_factors
+        # 使用K-means聚类进行更精细的行为分析
+        features_for_clustering = ['recency', 'frequency', 'monetary_avg', 'T']
+        scaler = StandardScaler()
+        scaled_features = scaler.fit_transform(customer_rfm[features_for_clustering])
 
-    def _learn_transition_matrix(self):
-        """学习月份间的状态转移矩阵"""
-        logger.info("  学习状态转移矩阵...")
+        # 确定最优聚类数
+        silhouette_scores = []
+        K_range = range(2, min(8, len(customer_rfm) // 10))
 
-        # 初始化转移矩阵
+        for k in K_range:
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            cluster_labels = kmeans.fit_predict(scaled_features)
+            silhouette_avg = silhouette_score(scaled_features, cluster_labels)
+            silhouette_scores.append(silhouette_avg)
+
+        optimal_k = K_range[np.argmax(silhouette_scores)]
+
+        # 执行最优聚类
+        kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
+        customer_rfm['behavior_cluster'] = kmeans.fit_predict(scaled_features)
+
+        print(f"   ✅ 行为异质性分析完成:")
+        print(f"      - 最优聚类数: {optimal_k}")
+        print(f"      - 轮廓系数: {max(silhouette_scores):.3f}")
+
+        # 聚类特征分析
+        cluster_analysis = customer_rfm.groupby('behavior_cluster')[features_for_clustering].mean().round(2)
+
+        for cluster_id in cluster_analysis.index:
+            cluster_data = cluster_analysis.loc[cluster_id]
+            customer_count = (customer_rfm['behavior_cluster'] == cluster_id).sum()
+            print(
+                f"      - 聚类{cluster_id}: {customer_count}人, R={cluster_data['recency']:.0f}, F={cluster_data['frequency']:.1f}, M={cluster_data['monetary_avg']:.0f}")
+
+        self.rfm_data = customer_rfm
+        self.customer_segments = {
+            'segment_stats': segment_stats,
+            'cluster_analysis': cluster_analysis,
+            'optimal_k': optimal_k,
+            'scaler': scaler
+        }
+
+        return customer_rfm
+
+    # ==================== 第三阶段：季节性马尔可夫链学习 ====================
+
+    def learn_seasonal_patterns(self):
+        """
+        第三阶段：季节性马尔可夫链学习
+        """
+        print("\n" + "=" * 60)
+        print("第三阶段：季节性马尔可夫链学习")
+        print("=" * 60)
+
+        # 3.1 季节性模式识别
+        print("🌟 3.1 季节性模式识别...")
+
+        # 按月统计收入
+        monthly_revenue = self.processed_data.groupby(['year', 'month'])['amount'].sum().reset_index()
+        monthly_revenue['date'] = pd.to_datetime(monthly_revenue[['year', 'month']].assign(day=1))
+        monthly_revenue = monthly_revenue.sort_values('date')
+
+        # 计算月度季节性因子
+        monthly_avg = monthly_revenue.groupby('month')['amount'].mean()
+        overall_avg = monthly_avg.mean()
+        basic_seasonal_factors = (monthly_avg / overall_avg).to_dict()
+
+        print(f"   ✅ 基础季节性因子计算完成:")
+        for month, factor in basic_seasonal_factors.items():
+            print(f"      - {month}月: {factor:.3f}")
+
+        # 3.2 马尔可夫状态转移矩阵学习
+        print("\n🔗 3.2 马尔可夫状态转移矩阵学习...")
+
+        # 构建12x12的月份转移矩阵
         transition_matrix = np.zeros((12, 12))
 
-        # 统计月份转移
-        monthly_data = self.processed_data.groupby(['customer_id', 'year', 'month']).size().reset_index()
-        monthly_data.columns = ['customer_id', 'year', 'month', 'transactions']
-        monthly_data = monthly_data.sort_values(['customer_id', 'year', 'month'])
+        # 统计月份间的转移
+        monthly_sequence = monthly_revenue['month'].values
+        for i in range(len(monthly_sequence) - 1):
+            current_month = monthly_sequence[i] - 1  # 转换为0-11索引
+            next_month = monthly_sequence[i + 1] - 1
+            transition_matrix[current_month][next_month] += 1
 
-        # 统计转移次数
-        for customer_id in monthly_data['customer_id'].unique():
-            customer_data = monthly_data[monthly_data['customer_id'] == customer_id]
-
-            for i in range(len(customer_data) - 1):
-                current_month = customer_data.iloc[i]['month'] - 1  # 转为0-11索引
-                next_month = customer_data.iloc[i + 1]['month'] - 1
-
-                # 处理跨年情况
-                current_year = customer_data.iloc[i]['year']
-                next_year = customer_data.iloc[i + 1]['year']
-
-                if next_year == current_year + 1 and customer_data.iloc[i]['month'] == 12 and customer_data.iloc[i + 1][
-                    'month'] == 1:
-                    transition_matrix[current_month, next_month] += 1
-                elif next_year == current_year and customer_data.iloc[i + 1]['month'] == customer_data.iloc[i][
-                    'month'] + 1:
-                    transition_matrix[current_month, next_month] += 1
-
-        # 归一化转移矩阵
+        # 归一化为概率矩阵
         for i in range(12):
-            row_sum = transition_matrix[i, :].sum()
+            row_sum = transition_matrix[i].sum()
             if row_sum > 0:
-                transition_matrix[i, :] /= row_sum
+                transition_matrix[i] = transition_matrix[i] / row_sum
             else:
-                # 如果某个月没有转移数据，使用均匀分布
-                transition_matrix[i, :] = 1 / 12
+                # 如果某月没有数据，使用均匀分布
+                transition_matrix[i] = np.ones(12) / 12
 
-        return transition_matrix
+        print(f"   ✅ 转移矩阵学习完成:")
+        print(f"      - 矩阵维度: {transition_matrix.shape}")
+        print(f"      - 非零元素: {np.count_nonzero(transition_matrix)}")
 
-    def _learn_emission_probabilities(self):
-        """学习每个月份状态的发射概率（消费强度分布）"""
-        logger.info("  学习发射概率分布...")
+        # 3.3 发射概率学习
+        print("\n📊 3.3 发射概率学习...")
 
-        emission_probs = {}
+        # 计算每个月的消费强度分布
+        emission_probabilities = {}
 
         for month in range(1, 13):
             month_data = self.processed_data[self.processed_data['month'] == month]['amount']
 
             if len(month_data) > 0:
-                emission_probs[month] = {
+                emission_probabilities[month] = {
                     'mean': month_data.mean(),
                     'std': month_data.std(),
-                    'total_volume': month_data.sum(),
-                    'transaction_count': len(month_data)
+                    'count': len(month_data),
+                    'total': month_data.sum()
                 }
             else:
-                # 如果某月没有数据，使用全局平均
+                # 如果某月没有数据，使用全局平均值
                 global_mean = self.processed_data['amount'].mean()
-                emission_probs[month] = {
+                global_std = self.processed_data['amount'].std()
+                emission_probabilities[month] = {
                     'mean': global_mean,
-                    'std': self.processed_data['amount'].std(),
-                    'total_volume': 0,
-                    'transaction_count': 0
+                    'std': global_std,
+                    'count': 0,
+                    'total': 0
                 }
 
-        return emission_probs
+        print(f"   ✅ 发射概率学习完成:")
+        for month, prob in emission_probabilities.items():
+            print(f"      - {month}月: 均值={prob['mean']:.0f}, 标准差={prob['std']:.0f}, 样本数={prob['count']}")
 
-    def _compute_markov_seasonal_factors(self):
-        """计算马尔可夫综合季节性因子"""
-        logger.info("  计算马尔可夫综合季节性因子...")
+        # 3.4 马尔可夫季节性因子计算
+        print("\n🎯 3.4 马尔可夫季节性因子计算...")
 
         # 计算稳态分布
-        steady_state = self._compute_steady_state()
+        eigenvalues, eigenvectors = np.linalg.eig(transition_matrix.T)
+        stationary_index = np.argmax(eigenvalues.real)
+        stationary_distribution = np.abs(eigenvectors[:, stationary_index].real)
+        stationary_distribution = stationary_distribution / stationary_distribution.sum()
 
-        # 基于发射概率的季节性因子
-        global_mean = np.mean([self.emission_probabilities[m]['mean'] for m in range(1, 13)])
-        emission_factors = {}
+        # 综合计算马尔可夫季节性因子
+        markov_seasonal_factors = {}
+        global_emission_mean = np.mean([prob['mean'] for prob in emission_probabilities.values()])
+
         for month in range(1, 13):
-            emission_factors[month] = self.emission_probabilities[month]['mean'] / global_mean
+            # 发射权重（70%）
+            emission_weight = emission_probabilities[month]['mean'] / global_emission_mean
 
-        # 马尔可夫综合因子 = 0.7 * 发射概率 + 0.3 * 稳态权重
-        seasonal_factors = {}
-        for month in range(1, 13):
-            emission_weight = emission_factors[month]
-            steady_weight = steady_state[month - 1] * 12  # 归一化到平均值1
+            # 转移权重（30%）
+            transition_weight = stationary_distribution[month - 1] * 12  # 归一化到平均值1
 
-            seasonal_factors[month] = 0.7 * emission_weight + 0.3 * steady_weight
+            # 综合季节性因子
+            markov_factor = 0.7 * emission_weight + 0.3 * transition_weight
+            markov_seasonal_factors[month] = markov_factor
 
-        return seasonal_factors
+        print(f"   ✅ 马尔可夫季节性因子计算完成:")
+        for month, factor in markov_seasonal_factors.items():
+            basic_factor = basic_seasonal_factors[month]
+            improvement = abs(factor - 1) / abs(basic_factor - 1) if abs(basic_factor - 1) > 0.001 else 1
+            print(f"      - {month}月: 基础={basic_factor:.3f}, 马尔可夫={factor:.3f}, 改进={improvement:.2f}x")
 
-    def _compute_steady_state(self):
-        """计算马尔可夫链的稳态分布"""
-        try:
-            # 计算转移矩阵的特征向量
-            eigenvalues, eigenvectors = np.linalg.eig(self.transition_matrix.T)
+        self.seasonal_factors = {
+            'basic': basic_seasonal_factors,
+            'markov': markov_seasonal_factors
+        }
+        self.markov_transition_matrix = transition_matrix
+        self.emission_probabilities = emission_probabilities
 
-            # 找到特征值为1的特征向量（稳态分布）
-            steady_state_index = np.argmin(np.abs(eigenvalues - 1))
-            steady_state = np.real(eigenvectors[:, steady_state_index])
+        return markov_seasonal_factors
 
-            # 归一化
-            steady_state = steady_state / np.sum(steady_state)
+    # ==================== 第四阶段：MBG-NBD模型训练 ====================
 
-            return steady_state
-        except:
-            # 如果计算失败，返回均匀分布
-            return np.ones(12) / 12
-
-    def create_rfm_features(self):
-        """创建RFM特征"""
-        logger.info("开始创建RFM特征...")
-
-        # 分离观察期数据
-        observation_data = self.processed_data[
-            self.processed_data['order_date'] <= self.observation_period_end
-            ]
-
-        # 计算RFM特征
-        rfm_features = []
-
-        for customer_id in observation_data['customer_id'].unique():
-            customer_data = observation_data[observation_data['customer_id'] == customer_id]
-
-            if len(customer_data) == 0:
-                continue
-
-            # 计算特征
-            first_purchase = customer_data['order_date'].min()
-            last_purchase = customer_data['order_date'].max()
-
-            # Frequency: 购买次数 - 1 (MBG-NBD约定)
-            frequency = len(customer_data) - 1
-
-            # Recency: 最后一次购买到观察期结束的时间（天）
-            recency = (last_purchase - first_purchase).days
-
-            # T: 客户生命周期长度（天）
-            T = (self.observation_period_end - first_purchase).days
-
-            # Monetary: 平均订单价值
-            monetary = customer_data['amount'].mean()
-
-            # 总消费金额
-            total_amount = customer_data['amount'].sum()
-
-            rfm_features.append({
-                'customer_id': customer_id,
-                'frequency': frequency,
-                'recency': recency,
-                'T': T,
-                'monetary': monetary,
-                'total_amount': total_amount,
-                'first_purchase': first_purchase,
-                'last_purchase': last_purchase,
-                'transaction_count': len(customer_data)
-            })
-
-        self.rfm_data = pd.DataFrame(rfm_features)
-
-        # 过滤无效数据
-        initial_count = len(self.rfm_data)
-        self.rfm_data = self.rfm_data[
-            (self.rfm_data['T'] > 0) &
-            (self.rfm_data['recency'] >= 0) &
-            (self.rfm_data['recency'] <= self.rfm_data['T'])
-            ]
-
-        logger.info(f"RFM特征创建完成: {len(self.rfm_data)}个客户, 过滤{initial_count - len(self.rfm_data)}个无效客户")
-
-        return self.rfm_data
-
-    def split_data(self, test_size=0.2, random_state=42):
-        """分割训练和测试数据"""
-        logger.info(f"分割数据: 测试集比例{test_size}")
-
-        if self.rfm_data is None:
-            raise ValueError("请先创建RFM特征")
-
-        # 创建分层标签，确保每个分层至少有2个样本
-        frequency_bins = pd.cut(self.rfm_data['frequency'], bins=min(5, self.rfm_data['frequency'].nunique()),
-                                labels=False)
-
-        # 检查每个分层的样本数
-        bin_counts = pd.Series(frequency_bins).value_counts()
-        if (bin_counts < 2).any():
-            # 如果有分层样本数少于2，则不使用分层
-            logger.warning("某些分层样本数少于2，取消分层采样")
-            self.train_data, self.test_data = train_test_split(
-                self.rfm_data,
-                test_size=test_size,
-                random_state=random_state
-            )
-        else:
-            self.train_data, self.test_data = train_test_split(
-                self.rfm_data,
-                test_size=test_size,
-                random_state=random_state,
-                stratify=frequency_bins
-            )
-
-        logger.info(f"数据分割完成: 训练集{len(self.train_data)}个客户, 测试集{len(self.test_data)}个客户")
-
-        return self.train_data, self.test_data
-
-    def _mbgnbd_likelihood(self, params, frequency, recency, T):
+    def train_mbgnbd_models(self):
         """
-        MBG-NBD模型的对数似然函数
-
-        参数:
-        params: [r, alpha, a, b] - 模型参数
-        frequency: 购买频次
-        recency: 最近购买时间
-        T: 观察期长度
+        第四阶段：MBG-NBD模型训练
         """
-        r, alpha, a, b = params
+        print("\n" + "=" * 60)
+        print("第四阶段：MBG-NBD模型训练")
+        print("=" * 60)
 
-        # 参数约束
-        if r <= 0 or alpha <= 0 or a <= 0 or b <= 0:
-            return -np.inf
+        # 4.1 基础MBG-NBD模型训练
+        print("🎯 4.1 基础MBG-NBD模型训练...")
 
-        # 计算似然函数
-        try:
-            # 第一部分：购买过程
-            part1 = (
-                    loggamma(r + frequency) - loggamma(r) +
-                    r * np.log(alpha) - (r + frequency) * np.log(alpha + T)
-            )
+        # 准备训练数据
+        frequency = self.rfm_data['historical_frequency'].values
+        recency = self.rfm_data['recency'].values
+        T = self.rfm_data['T'].values
 
-            # 第二部分：流失过程
-            if frequency > 0:
-                part2 = np.log(
-                    a / b * (
-                            hyp2f1(r + frequency, b + 1, a + b, recency / (alpha + T)) -
-                            (recency / (alpha + T)) ** (a + b) *
-                            hyp2f1(r + frequency, b + 1, a + b + 1, recency / (alpha + T))
-                    )
-                )
-            else:
-                part2 = np.log(a / (a + b))
+        print(f"   📊 训练数据准备:")
+        print(f"      - 客户数量: {len(frequency)}")
+        print(f"      - 平均频率: {frequency.mean():.2f}")
+        print(f"      - 平均间隔: {recency.mean():.1f}天")
+        print(f"      - 平均生命周期: {T.mean():.1f}天")
 
-            likelihood = part1 + part2
+        # 基础MBG-NBD似然函数
+        def mbgnbd_likelihood(params, frequency, recency, T):
+            r, alpha, a, b = params
 
-            # 处理数值问题
-            if np.isnan(likelihood) or np.isinf(likelihood):
-                return -1e10
+            # 参数约束
+            if r <= 0 or alpha <= 0 or a <= 0 or b <= 0:
+                return 1e10
+
+            likelihood = 0
+
+            for i in range(len(frequency)):
+                freq = frequency[i]
+                rec = recency[i]
+                t = T[i]
+
+                try:
+                    if freq == 0:
+                        # 零购买客户
+                        term1 = a / (a + b)
+                        term2 = (alpha / (alpha + t)) ** r
+                        prob = term1 + (1 - term1) * term2
+                    else:
+                        # 有购买历史的客户
+                        term1 = math.lgamma(r + freq) - math.lgamma(r) + r * math.log(alpha)
+                        term2 = math.lgamma(a + b) + math.lgamma(b + freq) - math.lgamma(b) - math.lgamma(a + b + freq)
+                        term3 = -(r + freq) * math.log(alpha + t)
+                        term4 = math.log((a + b + freq - 1) / (alpha + t - rec))
+
+                        log_prob = term1 + term2 + term3 + term4
+                        prob = math.exp(min(log_prob, 700))  # 防止溢出
+
+                    if prob > 0:
+                        likelihood -= math.log(prob)
+                    else:
+                        likelihood += 1e6
+
+                except (ValueError, OverflowError):
+                    likelihood += 1e6
 
             return likelihood
 
-        except Exception:
-            return -1e10
+        # 模型训练
+        print("   🔄 开始模型训练...")
 
-    def _negative_log_likelihood(self, params, data):
-        """负对数似然函数（用于优化）"""
-        total_ll = 0
+        # 多次随机初始化寻找最优解
+        best_params = None
+        best_likelihood = float('inf')
 
-        for _, row in data.iterrows():
-            ll = self._mbgnbd_likelihood(
-                params,
-                row['frequency'],
-                row['recency'],
-                row['T']
-            )
-            total_ll += ll
-
-        return -total_ll
-
-    def fit(self, max_iter=1000, method='L-BFGS-B'):
-        """
-        训练MBG-NBD模型
-
-        参数:
-        max_iter: 最大迭代次数
-        method: 优化方法
-        """
-        logger.info("开始训练MBG-NBD模型...")
-
-        if self.train_data is None:
-            raise ValueError("请先分割数据")
-
-        # 初始参数
-        initial_params = [1.0, 1.0, 1.0, 1.0]  # [r, alpha, a, b]
-
-        # 参数边界
-        bounds = [(0.01, 10), (0.01, 10), (0.01, 10), (0.01, 10)]
-
-        # 多次随机初始化，选择最佳结果
-        best_result = None
-        best_likelihood = np.inf
-
-        for i in range(5):  # 尝试5次不同的初始化
-            # 随机初始化
-            init_params = np.random.uniform(0.1, 2.0, 4)
+        for attempt in range(5):
+            # 随机初始化参数
+            initial_params = [
+                np.random.uniform(0.1, 2.0),  # r
+                np.random.uniform(0.1, 5.0),  # alpha
+                np.random.uniform(0.1, 2.0),  # a
+                np.random.uniform(0.1, 2.0)  # b
+            ]
 
             try:
-                # 优化
-                result = optimize.minimize(
-                    self._negative_log_likelihood,
-                    init_params,
-                    args=(self.train_data,),
-                    method=method,
-                    bounds=bounds,
-                    options={'maxiter': max_iter}
+                result = minimize(
+                    mbgnbd_likelihood,
+                    initial_params,
+                    args=(frequency, recency, T),
+                    method='L-BFGS-B',
+                    bounds=[(0.01, 10), (0.01, 20), (0.01, 10), (0.01, 10)]
                 )
 
                 if result.success and result.fun < best_likelihood:
-                    best_result = result
                     best_likelihood = result.fun
+                    best_params = result.x
 
             except Exception as e:
-                logger.warning(f"优化尝试{i + 1}失败: {e}")
+                print(f"      ⚠️ 训练尝试{attempt + 1}失败: {e}")
                 continue
 
-        if best_result is None or not best_result.success:
-            raise RuntimeError("模型训练失败，请检查数据质量")
+        if best_params is None:
+            print("   ❌ 基础模型训练失败")
+            return False
 
-        self.params = best_result.x
-        self.model_fitted = True
+        self.base_model_params = best_params
+        r, alpha, a, b = best_params
 
-        logger.info(f"模型训练完成")
-        logger.info(
-            f"参数: r={self.params[0]:.4f}, alpha={self.params[1]:.4f}, a={self.params[2]:.4f}, b={self.params[3]:.4f}")
-        logger.info(f"负对数似然: {best_likelihood:.2f}")
+        print(f"   ✅ 基础MBG-NBD模型训练完成:")
+        print(f"      - r (购买率形状): {r:.4f}")
+        print(f"      - α (购买率尺度): {alpha:.4f}")
+        print(f"      - a (流失率形状): {a:.4f}")
+        print(f"      - b (流失率尺度): {b:.4f}")
+        print(f"      - 负对数似然: {best_likelihood:.2f}")
 
-        return self.params
+        # 4.2 季节性增强MBG-NBD模型训练
+        print("\n🌟 4.2 季节性增强MBG-NBD模型训练...")
 
-    def predict_purchases(self, t, frequency=None, recency=None, T=None, data=None):
-        """
-        预测未来购买次数
+        # 季节性增强似然函数
+        def seasonal_mbgnbd_likelihood(params, frequency, recency, T, seasonal_factors):
+            r, alpha, a, b, seasonal_strength = params
 
-        参数:
-        t: 预测期长度
-        frequency, recency, T: 单个客户的RFM特征
-        data: 批量预测的数据
-        """
-        if not self.model_fitted:
-            raise ValueError("请先训练模型")
+            if r <= 0 or alpha <= 0 or a <= 0 or b <= 0 or seasonal_strength < 0 or seasonal_strength > 1:
+                return 1e10
 
-        r, alpha, a, b = self.params
+            likelihood = 0
 
-        if data is not None:
-            # 批量预测
-            predictions = []
-            for _, row in data.iterrows():
-                pred = self._predict_single_customer(
-                    t, row['frequency'], row['recency'], row['T'], r, alpha, a, b
+            for i in range(len(frequency)):
+                freq = frequency[i]
+                rec = recency[i]
+                t = T[i]
+
+                # 获取季节性调整
+                # 这里简化处理，使用平均季节性因子
+                avg_seasonal_factor = np.mean(list(seasonal_factors.values()))
+                seasonal_adjustment = 1 + seasonal_strength * (avg_seasonal_factor - 1)
+
+                # 调整参数
+                adjusted_alpha = alpha * seasonal_adjustment
+
+                try:
+                    if freq == 0:
+                        term1 = a / (a + b)
+                        term2 = (adjusted_alpha / (adjusted_alpha + t)) ** r
+                        prob = term1 + (1 - term1) * term2
+                    else:
+                        term1 = math.lgamma(r + freq) - math.lgamma(r) + r * math.log(adjusted_alpha)
+                        term2 = math.lgamma(a + b) + math.lgamma(b + freq) - math.lgamma(b) - math.lgamma(a + b + freq)
+                        term3 = -(r + freq) * math.log(adjusted_alpha + t)
+                        term4 = math.log((a + b + freq - 1) / (adjusted_alpha + t - rec))
+
+                        log_prob = term1 + term2 + term3 + term4
+                        prob = math.exp(min(log_prob, 700))
+
+                    if prob > 0:
+                        likelihood -= math.log(prob)
+                    else:
+                        likelihood += 1e6
+
+                except (ValueError, OverflowError):
+                    likelihood += 1e6
+
+            return likelihood
+
+        # 季节性模型训练
+        print("   🔄 开始季节性模型训练...")
+
+        best_seasonal_params = None
+        best_seasonal_likelihood = float('inf')
+
+        for attempt in range(5):
+            # 从基础模型参数开始，添加季节性强度参数
+            initial_params = list(best_params) + [0.2]  # 初始季节性强度20%
+
+            try:
+                result = minimize(
+                    seasonal_mbgnbd_likelihood,
+                    initial_params,
+                    args=(frequency, recency, T, self.seasonal_factors['markov']),
+                    method='L-BFGS-B',
+                    bounds=[(0.01, 10), (0.01, 20), (0.01, 10), (0.01, 10), (0, 1)]
                 )
-                predictions.append(pred)
-            return np.array(predictions)
-        else:
-            # 单个客户预测
-            return self._predict_single_customer(t, frequency, recency, T, r, alpha, a, b)
 
-    def _predict_single_customer(self, t, frequency, recency, T, r, alpha, a, b):
-        """单个客户的购买预测"""
-        try:
-            # 计算条件期望购买次数
+                if result.success and result.fun < best_seasonal_likelihood:
+                    best_seasonal_likelihood = result.fun
+                    best_seasonal_params = result.x
+
+            except Exception as e:
+                print(f"      ⚠️ 季节性训练尝试{attempt + 1}失败: {e}")
+                continue
+
+        if best_seasonal_params is None:
+            print("   ⚠️ 季节性模型训练失败，使用基础模型参数")
+            self.enhanced_model_params = list(best_params) + [0.0]
+        else:
+            self.enhanced_model_params = best_seasonal_params
+
+        r_s, alpha_s, a_s, b_s, seasonal_strength = self.enhanced_model_params
+
+        print(f"   ✅ 季节性增强模型训练完成:")
+        print(f"      - r (购买率形状): {r_s:.4f}")
+        print(f"      - α (购买率尺度): {alpha_s:.4f}")
+        print(f"      - a (流失率形状): {a_s:.4f}")
+        print(f"      - b (流失率尺度): {b_s:.4f}")
+        print(f"      - 季节性强度: {seasonal_strength:.4f}")
+        print(f"      - 负对数似然: {best_seasonal_likelihood:.2f}")
+
+        # 4.3 模型改进效果分析
+        print("\n📊 4.3 模型改进效果分析...")
+
+        likelihood_improvement = (best_likelihood - best_seasonal_likelihood) / best_likelihood * 100
+
+        print(f"   ✅ 模型改进分析:")
+        print(f"      - 基础模型似然: {best_likelihood:.2f}")
+        print(f"      - 季节性模型似然: {best_seasonal_likelihood:.2f}")
+        print(f"      - 似然改进: {likelihood_improvement:.2f}%")
+
+        if likelihood_improvement > 1:
+            print(f"      - 🎉 季节性模型显著优于基础模型")
+        elif likelihood_improvement > 0:
+            print(f"      - ✅ 季节性模型略优于基础模型")
+        else:
+            print(f"      - ⚠️ 季节性改进不明显")
+
+        return True
+
+    # ==================== 第五阶段：CLV预测与验证 ====================
+
+    def predict_clv(self):
+        """
+        第五阶段：CLV预测与验证
+        """
+        print("\n" + "=" * 60)
+        print("第五阶段：CLV预测与验证")
+        print("=" * 60)
+
+        # 5.1 基础MBG-NBD预测
+        print("🎯 5.1 基础MBG-NBD预测...")
+
+        r, alpha, a, b = self.base_model_params
+
+        base_predictions = []
+
+        for _, customer in self.rfm_data.iterrows():
+            frequency = customer['historical_frequency']
+            recency = customer['recency']
+            T = customer['T']
+            avg_order_value = customer['monetary_avg']
+
+            # 计算预测期内的期望购买次数
             if frequency == 0:
-                # 没有重复购买的客户
-                prediction = (a / (a + b)) * (r * t) / (alpha + T)
+                # 零购买客户
+                expected_purchases = (a / (a + b)) * (r * self.prediction_period) / (alpha + T)
             else:
-                # 有重复购买的客户
-                prediction = (
-                        (r + frequency) * t / (alpha + T + t) *
+                # 有购买历史的客户
+                expected_purchases = (
+                        (r + frequency) * self.prediction_period / (alpha + T + self.prediction_period) *
                         (a + b + frequency - 1) / (a + frequency - 1)
                 )
 
-            return max(0, prediction)  # 确保非负
+            # 计算CLV
+            clv = expected_purchases * avg_order_value
 
-        except Exception:
-            return 0.0
-
-    def predict_clv(self, prediction_period=None, discount_rate=0.01, apply_seasonality=True):
-        """
-        预测客户生命周期价值（包含季节性调整）
-
-        参数:
-        prediction_period: 预测期长度（天）
-        discount_rate: 折现率
-        apply_seasonality: 是否应用季节性调整
-        """
-        if not self.model_fitted:
-            raise ValueError("请先训练模型")
-
-        if prediction_period is None:
-            prediction_period = self.prediction_period
-
-        logger.info(f"开始预测CLV，预测期{prediction_period}天，季节性调整: {apply_seasonality}")
-
-        # 预测购买次数
-        predicted_purchases = self.predict_purchases(
-            prediction_period,
-            data=self.rfm_data
-        )
-
-        # 计算CLV
-        clv_predictions = []
-
-        for i, (_, customer) in enumerate(self.rfm_data.iterrows()):
-            # 预期购买次数
-            expected_purchases = predicted_purchases[i]
-
-            # 平均订单价值
-            avg_order_value = customer['monetary']
-
-            # 基础预期收入
-            base_expected_revenue = expected_purchases * avg_order_value
-
-            # 季节性调整
-            if apply_seasonality and self.seasonal_learned:
-                # 计算预测期内的季节性调整
-                seasonal_adjustment = self._calculate_seasonal_adjustment(prediction_period)
-                seasonal_expected_revenue = base_expected_revenue * seasonal_adjustment
-            else:
-                seasonal_adjustment = 1.0
-                seasonal_expected_revenue = base_expected_revenue
-
-            # 折现
-            if discount_rate > 0:
-                discount_factor = 1 / (1 + discount_rate * prediction_period / 365)
-                base_discounted_clv = base_expected_revenue * discount_factor
-                seasonal_discounted_clv = seasonal_expected_revenue * discount_factor
-            else:
-                base_discounted_clv = base_expected_revenue
-                seasonal_discounted_clv = seasonal_expected_revenue
-
-            clv_predictions.append({
+            base_predictions.append({
                 'customer_id': customer['customer_id'],
-                'predicted_purchases': expected_purchases,
+                'segment': customer['segment'],
+                'behavior_cluster': customer['behavior_cluster'],
+                'expected_purchases': expected_purchases,
                 'avg_order_value': avg_order_value,
-                'base_expected_revenue': base_expected_revenue,
-                'seasonal_adjustment': seasonal_adjustment,
-                'seasonal_expected_revenue': seasonal_expected_revenue,
-                'base_discounted_clv': base_discounted_clv,
-                'seasonal_discounted_clv': seasonal_discounted_clv,
-                'historical_frequency': customer['frequency'],
-                'historical_monetary': customer['monetary'],
-                'historical_total': customer['total_amount']
+                'predicted_clv': clv,
+                'historical_frequency': frequency,
+                'recency': recency,
+                'T': T
             })
 
-        if apply_seasonality:
-            self.seasonal_clv_predictions = pd.DataFrame(clv_predictions)
-            logger.info(
-                f"季节性CLV预测完成: 平均CLV {self.seasonal_clv_predictions['seasonal_discounted_clv'].mean():.2f}")
-            return self.seasonal_clv_predictions
-        else:
-            self.clv_predictions = pd.DataFrame(clv_predictions)
-            logger.info(f"基础CLV预测完成: 平均CLV {self.clv_predictions['base_discounted_clv'].mean():.2f}")
-            return self.clv_predictions
+        self.base_predictions = pd.DataFrame(base_predictions)
 
-    def _calculate_seasonal_adjustment(self, prediction_period):
-        """计算预测期内的季节性调整因子"""
-        if not self.seasonal_learned:
-            return 1.0
+        base_total_clv = self.base_predictions['predicted_clv'].sum()
+        base_avg_clv = self.base_predictions['predicted_clv'].mean()
 
-        # 计算预测期起始月份
-        start_date = self.observation_period_end
-        end_date = start_date + timedelta(days=prediction_period)
+        print(f"   ✅ 基础预测完成:")
+        print(f"      - 总CLV: {base_total_clv:,.2f}元")
+        print(f"      - 平均CLV: {base_avg_clv:.2f}元")
+        print(f"      - 预测客户数: {len(self.base_predictions)}")
 
-        # 计算预测期内各月份的权重
-        current_date = start_date
-        monthly_weights = {}
-        total_days = 0
+        # 5.2 季节性增强预测
+        print("\n🌟 5.2 季节性增强预测...")
 
-        while current_date < end_date:
-            month = current_date.month
+        r_s, alpha_s, a_s, b_s, seasonal_strength = self.enhanced_model_params
 
-            # 计算该月在预测期内的天数
-            month_end = min(
-                end_date,
-                datetime(current_date.year + (1 if current_date.month == 12 else 0),
-                         (current_date.month % 12) + 1, 1)
-            )
-            days_in_period = (month_end - current_date).days
+        enhanced_predictions = []
 
-            if month not in monthly_weights:
-                monthly_weights[month] = 0
-            monthly_weights[month] += days_in_period
-            total_days += days_in_period
+        # 计算预测期的平均季节性因子
+        current_month = datetime.now().month
+        prediction_months = []
+        for i in range(self.prediction_period):
+            month = ((current_month - 1 + i // 30) % 12) + 1
+            prediction_months.append(month)
 
-            # 移动到下个月
-            if current_date.month == 12:
-                current_date = datetime(current_date.year + 1, 1, 1)
-            else:
-                current_date = datetime(current_date.year, current_date.month + 1, 1)
+        # 计算加权平均季节性因子
+        seasonal_weights = {}
+        for month in range(1, 13):
+            seasonal_weights[month] = prediction_months.count(month) / len(prediction_months)
 
-        # 计算加权季节性调整因子
-        weighted_seasonal_factor = 0
-        for month, days in monthly_weights.items():
-            weight = days / total_days
-            seasonal_factor = self.seasonal_factors.get(month, 1.0)
-            weighted_seasonal_factor += weight * seasonal_factor
-
-        return weighted_seasonal_factor
-
-    def validate_model(self, apply_seasonality=True):
-        """模型验证（包含季节性调整验证）"""
-        if not self.model_fitted or self.test_data is None:
-            raise ValueError("请先训练模型并分割数据")
-
-        logger.info(f"开始模型验证，季节性调整: {apply_seasonality}")
-
-        # 在测试集上预测
-        test_predictions = self.predict_purchases(
-            self.prediction_period,
-            data=self.test_data
+        weighted_seasonal_factor = sum(
+            self.seasonal_factors['markov'][month] * weight
+            for month, weight in seasonal_weights.items()
         )
 
-        # 计算实际购买次数
-        prediction_start = self.observation_period_end
-        prediction_end = prediction_start + timedelta(days=self.prediction_period)
+        print(f"   📅 预测期季节性分析:")
+        print(f"      - 预测起始月份: {current_month}月")
+        print(f"      - 加权季节性因子: {weighted_seasonal_factor:.3f}")
 
-        actual_purchases = []
-        for _, customer in self.test_data.iterrows():
-            customer_future_data = self.processed_data[
-                (self.processed_data['customer_id'] == customer['customer_id']) &
-                (self.processed_data['order_date'] > prediction_start) &
-                (self.processed_data['order_date'] <= prediction_end)
-                ]
-            actual_purchases.append(len(customer_future_data))
+        for _, customer in self.rfm_data.iterrows():
+            frequency = customer['historical_frequency']
+            recency = customer['recency']
+            T = customer['T']
+            avg_order_value = customer['monetary_avg']
 
-        actual_purchases = np.array(actual_purchases)
+            # 季节性调整
+            seasonal_adjustment = 1 + seasonal_strength * (weighted_seasonal_factor - 1)
+            adjusted_alpha = alpha_s * seasonal_adjustment
 
-        # 季节性调整预测
-        if apply_seasonality and self.seasonal_learned:
-            seasonal_adjustment = self._calculate_seasonal_adjustment(self.prediction_period)
-            seasonal_predictions = test_predictions * seasonal_adjustment
-        else:
-            seasonal_predictions = test_predictions
-            seasonal_adjustment = 1.0
-
-        # 计算评估指标
-        def calculate_metrics(actual, predicted, name):
-            mae = mean_absolute_error(actual, predicted)
-            mse = mean_squared_error(actual, predicted)
-            rmse = np.sqrt(mse)
-
-            # 计算MAPE（避免除零）
-            mask = actual > 0
-            if mask.sum() > 0:
-                mape = np.mean(np.abs((actual[mask] - predicted[mask]) / actual[mask])) * 100
+            # 计算预测期内的期望购买次数
+            if frequency == 0:
+                expected_purchases = (a_s / (a_s + b_s)) * (r_s * self.prediction_period) / (adjusted_alpha + T)
             else:
-                mape = np.nan
+                expected_purchases = (
+                        (r_s + frequency) * self.prediction_period / (adjusted_alpha + T + self.prediction_period) *
+                        (a_s + b_s + frequency - 1) / (a_s + frequency - 1)
+                )
 
-            # 计算相关系数
-            correlation = np.corrcoef(actual, predicted)[0, 1] if len(actual) > 1 else np.nan
+            # 计算CLV
+            clv = expected_purchases * avg_order_value
 
-            return {
-                f'{name}_mae': mae,
-                f'{name}_mse': mse,
-                f'{name}_rmse': rmse,
-                f'{name}_mape': mape,
-                f'{name}_correlation': correlation,
-                f'{name}_actual_mean': np.mean(actual),
-                f'{name}_predicted_mean': np.mean(predicted),
-                f'{name}_actual_std': np.std(actual),
-                f'{name}_predicted_std': np.std(predicted)
+            enhanced_predictions.append({
+                'customer_id': customer['customer_id'],
+                'segment': customer['segment'],
+                'behavior_cluster': customer['behavior_cluster'],
+                'expected_purchases': expected_purchases,
+                'avg_order_value': avg_order_value,
+                'predicted_clv': clv,
+                'seasonal_adjustment': seasonal_adjustment,
+                'historical_frequency': frequency,
+                'recency': recency,
+                'T': T
+            })
+
+        self.enhanced_predictions = pd.DataFrame(enhanced_predictions)
+
+        enhanced_total_clv = self.enhanced_predictions['predicted_clv'].sum()
+        enhanced_avg_clv = self.enhanced_predictions['predicted_clv'].mean()
+
+        print(f"   ✅ 季节性增强预测完成:")
+        print(f"      - 总CLV: {enhanced_total_clv:,.2f}元")
+        print(f"      - 平均CLV: {enhanced_avg_clv:.2f}元")
+        print(f"      - 季节性调整: {seasonal_adjustment:.3f}")
+
+        # 5.3 预测效果对比
+        print("\n📊 5.3 预测效果对比...")
+
+        clv_improvement = (enhanced_total_clv - base_total_clv) / base_total_clv * 100
+
+        print(f"   ✅ 预测对比分析:")
+        print(f"      - 基础模型总CLV: {base_total_clv:,.2f}元")
+        print(f"      - 增强模型总CLV: {enhanced_total_clv:,.2f}元")
+        print(f"      - CLV提升: {clv_improvement:+.2f}%")
+        print(f"      - 绝对提升: {enhanced_total_clv - base_total_clv:+,.2f}元")
+
+        return True
+
+    # ==================== 第六阶段：效果验证与可视化 ====================
+
+    def validate_and_visualize(self, save_path=None):
+        """
+        第六阶段：效果验证与可视化
+        """
+        print("\n" + "=" * 60)
+        print("第六阶段：效果验证与可视化")
+        print("=" * 60)
+
+        # 6.1 模型验证
+        print("✅ 6.1 模型验证...")
+
+        # 计算预测准确性指标
+        base_predictions = self.base_predictions['predicted_clv'].values
+        enhanced_predictions = self.enhanced_predictions['predicted_clv'].values
+
+        # 基础统计
+        validation_metrics = {
+            'base_model': {
+                'mean_clv': np.mean(base_predictions),
+                'median_clv': np.median(base_predictions),
+                'std_clv': np.std(base_predictions),
+                'total_clv': np.sum(base_predictions),
+                'customers_with_clv': np.sum(base_predictions > 0)
+            },
+            'enhanced_model': {
+                'mean_clv': np.mean(enhanced_predictions),
+                'median_clv': np.median(enhanced_predictions),
+                'std_clv': np.std(enhanced_predictions),
+                'total_clv': np.sum(enhanced_predictions),
+                'customers_with_clv': np.sum(enhanced_predictions > 0)
             }
+        }
 
-        # 基础模型验证
-        base_results = calculate_metrics(actual_purchases, test_predictions, 'base')
+        # 相关性分析
+        correlation = np.corrcoef(base_predictions, enhanced_predictions)[0, 1]
 
-        # 季节性模型验证
-        seasonal_results = calculate_metrics(actual_purchases, seasonal_predictions, 'seasonal')
+        print(f"   📊 验证指标:")
+        print(f"      - 预测相关性: {correlation:.4f}")
+        print(f"      - 基础模型活跃客户: {validation_metrics['base_model']['customers_with_clv']}")
+        print(f"      - 增强模型活跃客户: {validation_metrics['enhanced_model']['customers_with_clv']}")
 
-        # 合并结果
-        validation_results = {**base_results, **seasonal_results}
-        validation_results['seasonal_adjustment_factor'] = seasonal_adjustment
+        self.performance_metrics = validation_metrics
 
-        if apply_seasonality:
-            self.seasonal_validation_results = validation_results
-        else:
-            self.validation_results = validation_results
+        # 6.2 创建综合可视化
+        print("\n📊 6.2 创建综合可视化...")
 
-        logger.info(f"模型验证完成:")
-        logger.info(
-            f"  基础模型 - MAE: {base_results['base_mae']:.4f}, MAPE: {base_results['base_mape']:.2f}%, 相关系数: {base_results['base_correlation']:.4f}")
-        if apply_seasonality:
-            logger.info(
-                f"  季节性模型 - MAE: {seasonal_results['seasonal_mae']:.4f}, MAPE: {seasonal_results['seasonal_mape']:.2f}%, 相关系数: {seasonal_results['seasonal_correlation']:.4f}")
-            logger.info(f"  季节性调整因子: {seasonal_adjustment:.3f}")
+        fig, axes = plt.subplots(3, 3, figsize=(20, 18))
+        fig.suptitle('完整MBG-NBD系统分析报告', fontsize=16, fontweight='bold')
 
-        return validation_results
-
-    def create_visualizations(self, save_path=None):
-        """创建可视化图表（包含季节性分析）"""
-        logger.info("创建可视化图表...")
-
-        fig, axes = plt.subplots(3, 3, figsize=(20, 16))
-        fig.suptitle('季节性MBG-NBD模型分析结果', fontsize=16, fontweight='bold')
-
-        # 1. RFM分布
+        # 1. 客户分层分布
         ax1 = axes[0, 0]
-        ax1.hist(self.rfm_data['frequency'], bins=30, alpha=0.7, color='blue')
-        ax1.set_xlabel('购买频次')
-        ax1.set_ylabel('客户数量')
-        ax1.set_title('购买频次分布')
-        ax1.grid(True, alpha=0.3)
+        segment_counts = self.rfm_data['segment'].value_counts()
+        colors = ['gold', 'lightgreen', 'lightblue', 'orange', 'lightcoral']
 
-        # 2. 货币价值分布
+        wedges, texts, autotexts = ax1.pie(segment_counts.values, labels=segment_counts.index,
+                                           autopct='%1.1f%%', colors=colors, startangle=90)
+        ax1.set_title('客户分层分布')
+
+        # 2. RFM特征分布
         ax2 = axes[0, 1]
-        ax2.hist(self.rfm_data['monetary'], bins=30, alpha=0.7, color='green')
-        ax2.set_xlabel('平均订单价值')
-        ax2.set_ylabel('客户数量')
-        ax2.set_title('货币价值分布')
+        ax2.scatter(self.rfm_data['recency'], self.rfm_data['frequency'],
+                    c=self.rfm_data['monetary_avg'], cmap='viridis', alpha=0.6)
+        ax2.set_xlabel('Recency (天)')
+        ax2.set_ylabel('Frequency (次)')
+        ax2.set_title('RFM特征分布')
         ax2.grid(True, alpha=0.3)
 
-        # 3. 季节性因子
+        # 3. 季节性因子对比
         ax3 = axes[0, 2]
-        if self.seasonal_learned:
-            months = list(range(1, 13))
-            factors = [self.seasonal_factors[m] for m in months]
-            ax3.plot(months, factors, marker='o', linewidth=2, color='red')
-            ax3.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
-            ax3.set_xlabel('月份')
-            ax3.set_ylabel('季节性因子')
-            ax3.set_title(f'季节性因子 ({self.seasonal_method}方法)')
-            ax3.grid(True, alpha=0.3)
-            ax3.set_xticks(months)
+        months = list(range(1, 13))
+        basic_factors = [self.seasonal_factors['basic'][m] for m in months]
+        markov_factors = [self.seasonal_factors['markov'][m] for m in months]
 
-        # 4. CLV对比（基础vs季节性）
+        x = np.arange(len(months))
+        width = 0.35
+
+        ax3.bar(x - width / 2, basic_factors, width, label='基础季节性', alpha=0.7)
+        ax3.bar(x + width / 2, markov_factors, width, label='马尔可夫季节性', alpha=0.7)
+        ax3.axhline(y=1, color='red', linestyle='--', alpha=0.5)
+
+        ax3.set_xlabel('月份')
+        ax3.set_ylabel('季节性因子')
+        ax3.set_title('季节性因子对比')
+        ax3.set_xticks(x)
+        ax3.set_xticklabels(months)
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # 4. CLV预测对比
         ax4 = axes[1, 0]
-        if self.clv_predictions is not None and self.seasonal_clv_predictions is not None:
-            ax4.scatter(
-                self.clv_predictions['base_discounted_clv'],
-                self.seasonal_clv_predictions['seasonal_discounted_clv'],
-                alpha=0.6
-            )
-            max_clv = max(
-                self.clv_predictions['base_discounted_clv'].max(),
-                self.seasonal_clv_predictions['seasonal_discounted_clv'].max()
-            )
-            ax4.plot([0, max_clv], [0, max_clv], 'r--', alpha=0.8)
-            ax4.set_xlabel('基础CLV')
-            ax4.set_ylabel('季节性调整CLV')
-            ax4.set_title('基础CLV vs 季节性CLV')
-            ax4.grid(True, alpha=0.3)
+        ax4.scatter(base_predictions, enhanced_predictions, alpha=0.6)
 
-        # 5. 季节性CLV分布
+        # 添加对角线
+        min_val = min(base_predictions.min(), enhanced_predictions.min())
+        max_val = max(base_predictions.max(), enhanced_predictions.max())
+        ax4.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8)
+
+        ax4.set_xlabel('基础模型CLV预测')
+        ax4.set_ylabel('增强模型CLV预测')
+        ax4.set_title('CLV预测对比')
+        ax4.grid(True, alpha=0.3)
+
+        # 5. 客户分层CLV分布
         ax5 = axes[1, 1]
-        if self.seasonal_clv_predictions is not None:
-            ax5.hist(self.seasonal_clv_predictions['seasonal_discounted_clv'], bins=30, alpha=0.7, color='purple')
-            ax5.set_xlabel('季节性调整CLV')
-            ax5.set_ylabel('客户数量')
-            ax5.set_title('季节性CLV分布')
-            ax5.grid(True, alpha=0.3)
+        segment_clv = self.enhanced_predictions.groupby('segment')['predicted_clv'].sum().sort_values(ascending=True)
 
-        # 6. 频次vs货币价值散点图
+        bars = ax5.barh(range(len(segment_clv)), segment_clv.values,
+                        color=['lightcoral', 'orange', 'lightblue', 'lightgreen', 'gold'])
+        ax5.set_yticks(range(len(segment_clv)))
+        ax5.set_yticklabels(segment_clv.index)
+        ax5.set_xlabel('总CLV预测 (元)')
+        ax5.set_title('各客户分层CLV贡献')
+        ax5.grid(True, alpha=0.3)
+
+        # 添加数值标签
+        for i, bar in enumerate(bars):
+            width = bar.get_width()
+            ax5.text(width + max(segment_clv.values) * 0.01, bar.get_y() + bar.get_height() / 2,
+                     f'{width:,.0f}', ha='left', va='center', fontsize=9)
+
+        # 6. 行为聚类分析
         ax6 = axes[1, 2]
-        scatter = ax6.scatter(
-            self.rfm_data['frequency'],
-            self.rfm_data['monetary'],
-            alpha=0.6,
-            c=self.rfm_data['T'],
-            cmap='viridis'
-        )
-        ax6.set_xlabel('购买频次')
-        ax6.set_ylabel('平均订单价值')
-        ax6.set_title('频次 vs 货币价值')
-        plt.colorbar(scatter, ax=ax6, label='客户生命周期(天)')
+        cluster_clv = self.enhanced_predictions.groupby('behavior_cluster')['predicted_clv'].mean()
 
-        # 7. 模型验证结果对比
+        bars = ax6.bar(cluster_clv.index, cluster_clv.values,
+                       color=plt.cm.Set3(np.linspace(0, 1, len(cluster_clv))))
+        ax6.set_xlabel('行为聚类')
+        ax6.set_ylabel('平均CLV (元)')
+        ax6.set_title('行为聚类平均CLV')
+        ax6.grid(True, alpha=0.3)
+
+        # 添加数值标签
+        for bar in bars:
+            height = bar.get_height()
+            ax6.text(bar.get_x() + bar.get_width() / 2, height + max(cluster_clv.values) * 0.01,
+                     f'{height:.0f}', ha='center', va='bottom', fontsize=9)
+
+        # 7. 模型参数对比
         ax7 = axes[2, 0]
-        if hasattr(self, 'seasonal_validation_results') and self.seasonal_validation_results:
-            methods = ['基础模型', '季节性模型']
-            mae_values = [
-                self.seasonal_validation_results['base_mae'],
-                self.seasonal_validation_results['seasonal_mae']
-            ]
-            bars = ax7.bar(methods, mae_values, color=['blue', 'red'], alpha=0.7)
-            ax7.set_ylabel('MAE')
-            ax7.set_title('模型验证对比')
-            ax7.grid(True, alpha=0.3)
+        param_names = ['r', 'α', 'a', 'b']
+        base_params = self.base_model_params
+        enhanced_params = self.enhanced_model_params[:4]
 
-            # 添加数值标签
-            for bar, value in zip(bars, mae_values):
-                height = bar.get_height()
-                ax7.text(bar.get_x() + bar.get_width() / 2., height + height * 0.01,
-                         f'{value:.2f}', ha='center', va='bottom', fontweight='bold')
+        x = np.arange(len(param_names))
+        width = 0.35
 
-        # 8. 季节性调整效果
+        ax7.bar(x - width / 2, base_params, width, label='基础模型', alpha=0.7)
+        ax7.bar(x + width / 2, enhanced_params, width, label='增强模型', alpha=0.7)
+
+        ax7.set_xlabel('模型参数')
+        ax7.set_ylabel('参数值')
+        ax7.set_title('模型参数对比')
+        ax7.set_xticks(x)
+        ax7.set_xticklabels(param_names)
+        ax7.legend()
+        ax7.grid(True, alpha=0.3)
+
+        # 8. CLV分布直方图
         ax8 = axes[2, 1]
-        if self.seasonal_clv_predictions is not None:
-            adjustments = self.seasonal_clv_predictions['seasonal_adjustment']
-            ax8.hist(adjustments, bins=20, alpha=0.7, color='orange')
-            ax8.axvline(x=1.0, color='red', linestyle='--', alpha=0.8, label='无调整')
-            ax8.set_xlabel('季节性调整因子')
-            ax8.set_ylabel('客户数量')
-            ax8.set_title('季节性调整因子分布')
-            ax8.legend()
-            ax8.grid(True, alpha=0.3)
+        ax8.hist(base_predictions, bins=30, alpha=0.7, label='基础模型', density=True)
+        ax8.hist(enhanced_predictions, bins=30, alpha=0.7, label='增强模型', density=True)
 
-        # 9. Top客户CLV排名
+        ax8.set_xlabel('CLV预测值 (元)')
+        ax8.set_ylabel('密度')
+        ax8.set_title('CLV预测分布')
+        ax8.legend()
+        ax8.grid(True, alpha=0.3)
+
+        # 9. 总结信息
         ax9 = axes[2, 2]
-        if self.seasonal_clv_predictions is not None:
-            top_customers = self.seasonal_clv_predictions.nlargest(15, 'seasonal_discounted_clv')
-            ax9.barh(range(len(top_customers)), top_customers['seasonal_discounted_clv'])
-            ax9.set_xlabel('季节性调整CLV')
-            ax9.set_ylabel('客户排名')
-            ax9.set_title('Top 15 客户CLV')
-            ax9.grid(True, alpha=0.3)
+        ax9.axis('off')
+
+        # 计算关键指标
+        total_customers = len(self.rfm_data)
+        base_total = validation_metrics['base_model']['total_clv']
+        enhanced_total = validation_metrics['enhanced_model']['total_clv']
+        improvement = (enhanced_total - base_total) / base_total * 100
+
+        summary_text = f"""
+系统分析总结
+
+📊 数据概况:
+• 总客户数: {total_customers:,}
+• 数据时间跨度: {(self.processed_data['order_date'].max() - self.processed_data['order_date'].min()).days}天
+• 总交易数: {len(self.processed_data):,}
+
+🎯 模型效果:
+• 基础CLV: {base_total:,.0f}元
+• 增强CLV: {enhanced_total:,.0f}元
+• 提升幅度: {improvement:+.2f}%
+
+🌟 关键改进:
+• 客户分层: {len(self.rfm_data['segment'].unique())}个层级
+• 行为聚类: {self.customer_segments['optimal_k']}个聚类
+• 季节性强度: {self.enhanced_model_params[4]:.1%}
+• 预测相关性: {correlation:.3f}
+
+🚀 业务价值:
+• 精准客户识别
+• 季节性营销优化
+• 个性化CLV预测
+• 数据驱动决策支持
+"""
+
+        ax9.text(0.05, 0.95, summary_text, transform=ax9.transAxes, fontsize=10,
+                 verticalalignment='top', fontfamily='monospace',
+                 bbox=dict(boxstyle="round,pad=0.5", facecolor="lightblue", alpha=0.8))
 
         plt.tight_layout()
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            logger.info(f"可视化图表已保存: {save_path}")
+            print(f"   ✅ 可视化图表已保存: {save_path}")
 
         plt.show()
 
-    def save_model(self, filepath):
-        """保存模型"""
-        model_data = {
-            'params': self.params,
-            'observation_period_end': self.observation_period_end,
-            'prediction_period': self.prediction_period,
-            'seasonal_method': self.seasonal_method,
-            'model_fitted': self.model_fitted,
-            'seasonal_factors': self.seasonal_factors,
-            'seasonal_learned': self.seasonal_learned,
-            'transition_matrix': self.transition_matrix,
-            'emission_probabilities': self.emission_probabilities,
-            'validation_results': self.validation_results,
-            'seasonal_validation_results': getattr(self, 'seasonal_validation_results', None)
-        }
+        return validation_metrics
 
-        with open(filepath, 'wb') as f:
-            pickle.dump(model_data, f)
+    # ==================== 系统总结与报告生成 ====================
 
-        logger.info(f"季节性模型已保存: {filepath}")
+    def generate_comprehensive_report(self, save_path=None):
+        """生成综合分析报告"""
+        print("\n📋 生成综合分析报告...")
 
-    def load_model(self, filepath):
-        """加载模型"""
-        with open(filepath, 'rb') as f:
-            model_data = pickle.load(f)
-
-        self.params = model_data['params']
-        self.observation_period_end = model_data['observation_period_end']
-        self.prediction_period = model_data['prediction_period']
-        self.seasonal_method = model_data.get('seasonal_method', 'none')
-        self.model_fitted = model_data['model_fitted']
-        self.seasonal_factors = model_data.get('seasonal_factors')
-        self.seasonal_learned = model_data.get('seasonal_learned', False)
-        self.transition_matrix = model_data.get('transition_matrix')
-        self.emission_probabilities = model_data.get('emission_probabilities')
-        self.validation_results = model_data.get('validation_results')
-        self.seasonal_validation_results = model_data.get('seasonal_validation_results')
-
-        logger.info(f"季节性模型已加载: {filepath}")
-
-    def generate_report(self, save_path=None):
-        """生成分析报告"""
         report = {
-            'model_summary': {
-                'model_type': 'Seasonal MBG-NBD',
-                'seasonal_method': self.seasonal_method,
-                'observation_period_end': str(self.observation_period_end),
-                'prediction_period_days': self.prediction_period,
-                'total_customers': len(self.rfm_data) if self.rfm_data is not None else 0,
-                'model_fitted': self.model_fitted,
-                'seasonal_learned': self.seasonal_learned
+            'system_info': {
+                'version': '2.0',
+                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'prediction_period_days': self.prediction_period
+            },
+            'data_summary': {
+                'total_customers': len(self.rfm_data),
+                'total_transactions': len(self.processed_data),
+                'data_span_days': (
+                            self.processed_data['order_date'].max() - self.processed_data['order_date'].min()).days,
+                'total_revenue': float(self.processed_data['amount'].sum())
+            },
+            'customer_segmentation': {
+                'segments': self.rfm_data['segment'].value_counts().to_dict(),
+                'behavior_clusters': int(self.customer_segments['optimal_k'])
+            },
+            'seasonal_analysis': {
+                'basic_factors': self.seasonal_factors['basic'],
+                'markov_factors': self.seasonal_factors['markov'],
+                'seasonal_strength': float(self.enhanced_model_params[4])
             },
             'model_parameters': {
-                'r': float(self.params[0]) if self.params is not None else None,
-                'alpha': float(self.params[1]) if self.params is not None else None,
-                'a': float(self.params[2]) if self.params is not None else None,
-                'b': float(self.params[3]) if self.params is not None else None
-            } if self.params is not None else None,
-            'seasonal_factors': {str(k): float(v) for k, v in
-                                 self.seasonal_factors.items()} if self.seasonal_factors else None,
-            'validation_results': self.validation_results,
-            'seasonal_validation_results': getattr(self, 'seasonal_validation_results', None),
-            'clv_summary': {
-                'base_total_clv': float(
-                    self.clv_predictions['base_discounted_clv'].sum()) if self.clv_predictions is not None else None,
-                'base_average_clv': float(
-                    self.clv_predictions['base_discounted_clv'].mean()) if self.clv_predictions is not None else None,
-                'seasonal_total_clv': float(self.seasonal_clv_predictions[
-                                                'seasonal_discounted_clv'].sum()) if self.seasonal_clv_predictions is not None else None,
-                'seasonal_average_clv': float(self.seasonal_clv_predictions[
-                                                  'seasonal_discounted_clv'].mean()) if self.seasonal_clv_predictions is not None else None,
-                'seasonal_improvement': float(
-                    (self.seasonal_clv_predictions['seasonal_discounted_clv'].sum() -
-                     self.clv_predictions['base_discounted_clv'].sum()) /
-                    self.clv_predictions['base_discounted_clv'].sum() * 100
-                ) if (self.clv_predictions is not None and self.seasonal_clv_predictions is not None) else None
-            } if (self.clv_predictions is not None or self.seasonal_clv_predictions is not None) else None
+                'base_model': {
+                    'r': float(self.base_model_params[0]),
+                    'alpha': float(self.base_model_params[1]),
+                    'a': float(self.base_model_params[2]),
+                    'b': float(self.base_model_params[3])
+                },
+                'enhanced_model': {
+                    'r': float(self.enhanced_model_params[0]),
+                    'alpha': float(self.enhanced_model_params[1]),
+                    'a': float(self.enhanced_model_params[2]),
+                    'b': float(self.enhanced_model_params[3]),
+                    'seasonal_strength': float(self.enhanced_model_params[4])
+                }
+            },
+            'prediction_results': {
+                'base_model': {
+                    'total_clv': float(self.performance_metrics['base_model']['total_clv']),
+                    'mean_clv': float(self.performance_metrics['base_model']['mean_clv']),
+                    'active_customers': int(self.performance_metrics['base_model']['customers_with_clv'])
+                },
+                'enhanced_model': {
+                    'total_clv': float(self.performance_metrics['enhanced_model']['total_clv']),
+                    'mean_clv': float(self.performance_metrics['enhanced_model']['mean_clv']),
+                    'active_customers': int(self.performance_metrics['enhanced_model']['customers_with_clv'])
+                },
+                'improvement': {
+                    'clv_improvement_pct': float((self.performance_metrics['enhanced_model']['total_clv'] -
+                                                  self.performance_metrics['base_model']['total_clv']) /
+                                                 self.performance_metrics['base_model']['total_clv'] * 100),
+                    'absolute_improvement': float(self.performance_metrics['enhanced_model']['total_clv'] -
+                                                  self.performance_metrics['base_model']['total_clv'])
+                }
+            },
+            'key_insights': [
+                f"完成了{len(self.rfm_data)}个客户的完整分层分析",
+                f"马尔可夫季节性学习识别了{len(self.seasonal_factors['markov'])}个月度模式",
+                f"增强模型相比基础模型CLV提升{(self.performance_metrics['enhanced_model']['total_clv'] - self.performance_metrics['base_model']['total_clv']) / self.performance_metrics['base_model']['total_clv'] * 100:.2f}%",
+                f"季节性强度为{self.enhanced_model_params[4]:.1%}，表明季节性影响适中",
+                f"客户行为异质性分析识别了{self.customer_segments['optimal_k']}个不同的行为模式"
+            ]
         }
 
         if save_path:
             with open(save_path, 'w', encoding='utf-8') as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
-            logger.info(f"分析报告已保存: {save_path}")
+            print(f"✅ 综合报告已保存: {save_path}")
 
         return report
 
+    def save_predictions(self, base_path='base_predictions.csv', enhanced_path='enhanced_predictions.csv'):
+        """保存预测结果"""
+        print("\n💾 保存预测结果...")
+
+        # 保存基础预测
+        self.base_predictions.to_csv(base_path, index=False, encoding='utf-8-sig')
+
+        # 保存增强预测
+        self.enhanced_predictions.to_csv(enhanced_path, index=False, encoding='utf-8-sig')
+
+        print(f"✅ 预测结果已保存:")
+        print(f"   - 基础预测: {base_path}")
+        print(f"   - 增强预测: {enhanced_path}")
+
+        return True
+
 
 def main():
-    """主函数 - 完整的季节性MBG-NBD使用示例"""
-    print("🚀 季节性MBG-NBD模型完整示例")
-    print("=" * 60)
+    """主函数 - 完整MBG-NBD系统演示"""
+    print("🚀 完整MBG-NBD客户生命周期价值预测系统")
+    print("=" * 80)
 
-    # 1. 初始化模型（使用马尔可夫季节性方法）
-    model = SeasonalMBGNBDModel(
-        prediction_period=90,
-        seasonal_method='markov'  # 可选: 'markov', 'preset', 'none'
-    )
+    # 初始化系统
+    system = CompleteMBGNBDSystem(prediction_period=90)
 
-    # 2. 加载数据
-    try:
-        data = model.load_data('/home/ubuntu/upload/manifest.csv')
-        print(f"✅ 数据加载成功: {len(data)}条记录")
-    except Exception as e:
-        print(f"❌ 数据加载失败: {e}")
-        return
+    # 第一阶段：数据加载与预处理
+    if not system.load_data('/Users/changyu/Downloads/manifest.csv'):
+        print("❌ 系统初始化失败")
+        return None
 
-    # 3. 学习季节性因子
-    seasonal_factors = model.learn_seasonal_factors()
-    print(f"✅ 季节性因子学习完成: {model.seasonal_method}方法")
+    # 第二阶段：客户分层与行为异质性分析
+    rfm_data = system.create_customer_segmentation()
+    if rfm_data is None:
+        print("❌ 客户分层失败")
+        return None
 
-    # 4. 创建RFM特征
-    rfm_data = model.create_rfm_features()
-    print(f"✅ RFM特征创建完成: {len(rfm_data)}个客户")
+    # 第三阶段：季节性马尔可夫链学习
+    seasonal_factors = system.learn_seasonal_patterns()
+    if seasonal_factors is None:
+        print("❌ 季节性学习失败")
+        return None
 
-    # 5. 分割数据
-    train_data, test_data = model.split_data(test_size=0.2)
-    print(f"✅ 数据分割完成: 训练集{len(train_data)}, 测试集{len(test_data)}")
+    # 第四阶段：MBG-NBD模型训练
+    if not system.train_mbgnbd_models():
+        print("❌ 模型训练失败")
+        return None
 
-    # 6. 训练模型
-    try:
-        params = model.fit()
-        print(f"✅ 模型训练完成")
-        print(f"   参数: r={params[0]:.4f}, alpha={params[1]:.4f}, a={params[2]:.4f}, b={params[3]:.4f}")
-    except Exception as e:
-        print(f"❌ 模型训练失败: {e}")
-        return
+    # 第五阶段：CLV预测与验证
+    if not system.predict_clv():
+        print("❌ CLV预测失败")
+        return None
 
-    # 7. 预测基础CLV
-    base_clv = model.predict_clv(apply_seasonality=False)
-    print(f"✅ 基础CLV预测完成: 平均CLV {base_clv['base_discounted_clv'].mean():.2f}")
+    # 第六阶段：效果验证与可视化
+    validation_metrics = system.validate_and_visualize('/Users/changyu/Downloads/CLV/complete_mbgnbd_analysis.png')
 
-    # 8. 预测季节性调整CLV
-    seasonal_clv = model.predict_clv(apply_seasonality=True)
-    print(f"✅ 季节性CLV预测完成: 平均CLV {seasonal_clv['seasonal_discounted_clv'].mean():.2f}")
+    # 生成综合报告
+    report = system.generate_comprehensive_report('/Users/changyu/Downloads/CLV/complete_mbgnbd_report.json')
 
-    # 9. 计算季节性改进
-    base_total = base_clv['base_discounted_clv'].sum()
-    seasonal_total = seasonal_clv['seasonal_discounted_clv'].sum()
-    improvement = (seasonal_total - base_total) / base_total * 100
-    print(f"✅ 季节性改进: {improvement:+.2f}%")
+    # 保存预测结果
+    system.save_predictions('/Users/changyu/Downloads/CLV/base_clv_predictions.csv', '/Users/changyu/Downloads/CLV/enhanced_clv_predictions.csv')
 
-    # 10. 模型验证
-    try:
-        validation_results = model.validate_model(apply_seasonality=True)
-        print(f"✅ 模型验证完成:")
-        print(f"   基础模型 - MAE: {validation_results['base_mae']:.4f}, MAPE: {validation_results['base_mape']:.2f}%")
-        print(
-            f"   季节性模型 - MAE: {validation_results['seasonal_mae']:.4f}, MAPE: {validation_results['seasonal_mape']:.2f}%")
-    except Exception as e:
-        print(f"⚠️ 模型验证失败: {e}")
+    print("\n" + "=" * 80)
+    print("🎉 完整MBG-NBD系统分析完成!")
+    print("=" * 80)
 
-    # 11. 创建可视化
-    model.create_visualizations('/home/ubuntu/seasonal_mbgnbd_analysis.png')
-    print("✅ 可视化图表已创建")
+    # 输出关键结果
+    base_clv = validation_metrics['base_model']['total_clv']
+    enhanced_clv = validation_metrics['enhanced_model']['total_clv']
+    improvement = (enhanced_clv - base_clv) / base_clv * 100
 
-    # 12. 保存模型
-    model.save_model('/home/ubuntu/seasonal_mbgnbd_model.pkl')
-    print("✅ 季节性模型已保存")
+    print(f"📊 核心结果:")
+    print(f"   - 客户总数: {len(system.rfm_data):,}")
+    print(f"   - 基础模型CLV: {base_clv:,.2f}元")
+    print(f"   - 增强模型CLV: {enhanced_clv:,.2f}元")
+    print(f"   - 模型改进: {improvement:+.2f}%")
+    print(f"   - 季节性强度: {system.enhanced_model_params[4]:.1%}")
 
-    # 13. 生成报告
-    report = model.generate_report('/home/ubuntu/seasonal_mbgnbd_report.json')
-    print("✅ 分析报告已生成")
-
-    # 14. 保存结果
-    if seasonal_clv is not None:
-        seasonal_clv.to_csv('/home/ubuntu/seasonal_clv_predictions.csv', index=False, encoding='utf-8-sig')
-        print("✅ 季节性CLV预测结果已保存")
-
-    print("\n🎉 季节性MBG-NBD模型分析完成!")
-    print(f"📊 总客户数: {len(rfm_data)}")
-    print(f"💰 基础总CLV: {base_total:.2f}")
-    print(f"🌟 季节性总CLV: {seasonal_total:.2f}")
-    print(f"📈 季节性改进: {improvement:+.2f}%")
-    print(f"🎯 季节性方法: {model.seasonal_method}")
-
-    return model
+    return system
 
 
 if __name__ == "__main__":
-    # 运行完整示例
-    model = main()
+    # 运行完整MBG-NBD系统
+    system = main()
